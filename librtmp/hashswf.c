@@ -57,10 +57,17 @@
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
 #include <openssl/rc4.h>
+#ifdef USE_OPENSSL_1_1 /* libssl1.1-dev */
+#define HMAC_setup(ctx, key, len)	HMAC_CTX_reset(ctx); HMAC_Init_ex(ctx, (unsigned char *)key, len, EVP_sha256(), 0)
+#define HMAC_crunch(ctx, buf, len)	HMAC_Update(ctx, (unsigned char *)buf, len)
+#define HMAC_finish(ctx, dig, dlen)	HMAC_Final(ctx, (unsigned char *)dig, &dlen);
+#define HMAC_close(ctx)	HMAC_CTX_reset(ctx)
+#else /* libssl1.0-dev*/
 #define HMAC_setup(ctx, key, len)	HMAC_CTX_init(&ctx); HMAC_Init_ex(&ctx, (unsigned char *)key, len, EVP_sha256(), 0)
 #define HMAC_crunch(ctx, buf, len)	HMAC_Update(&ctx, (unsigned char *)buf, len)
 #define HMAC_finish(ctx, dig, dlen)	HMAC_Final(&ctx, (unsigned char *)dig, &dlen);
 #define HMAC_close(ctx)	HMAC_CTX_cleanup(&ctx)
+#endif
 #endif
 
 extern void RTMP_TLS_Init();
@@ -289,7 +296,11 @@ leave:
 struct info
 {
   z_stream *zs;
+#ifdef USE_OPENSSL_1_1
+  HMAC_CTX *ctx;
+#else
   HMAC_CTX ctx;
+#endif
   int first;
   int zlib;
   int size;
@@ -582,6 +593,9 @@ RTMP_HashSWF(const char *url, unsigned int *size, unsigned char *hash,
     }
 
   in.first = 1;
+#ifdef USE_OPENSSL_1_1
+  in.ctx = HMAC_CTX_new();
+#endif
   HMAC_setup(in.ctx, "Genuine Adobe Flash Player 001", 30);
   inflateInit(&zs);
   in.zs = &zs;
@@ -649,6 +663,10 @@ RTMP_HashSWF(const char *url, unsigned int *size, unsigned char *hash,
 	}
     }
   HMAC_close(in.ctx);
+#ifdef USE_OPENSSL_1_1
+  HMAC_CTX_free(in.ctx);
+  in.ctx = NULL;
+#endif
 out:
   free(path);
   if (f)

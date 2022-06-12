@@ -211,20 +211,30 @@ DHInit(int nKeyBits)
   if (!dh)
     goto failed;
 
-  MP_new(dh->g);
+  MP_t g = NULL;
+  MP_t p = NULL;
 
-  if (!dh->g)
+  MP_new(g);
+
+  if (!g)
     goto failed;
 
-  MP_gethex(dh->p, P1024, res);	/* prime P1024, see dhgroups.h */
+  MP_gethex(p, P1024, res);	/* prime P1024, see dhgroups.h */
   if (!res)
     {
       goto failed;
     }
 
-  MP_set_w(dh->g, 2);	/* base 2 */
+  MP_set_w(g, 2);	/* base 2 */
 
+#ifdef USE_OPENSSL_1_1 /* libssl-dev */
+  DH_set0_pqg(dh, p, NULL, g);
+  DH_set_length(dh, nKeyBits);
+#else /* libssl1.0-dev */
+  dh->g = g;
+  dh->p = p;
   dh->length = nKeyBits;
+#endif
   return dh;
 
 failed:
@@ -251,12 +261,30 @@ DHGenerateKey(MDH *dh)
       MP_gethex(q1, Q1024, res);
       assert(res);
 
-      res = isValidPublicKey(dh->pub_key, dh->p, q1);
+      MP_t pub_key = NULL;
+      MP_t priv_key = NULL;
+      MP_t p = NULL;
+
+#ifdef USE_OPENSSL_1_1
+      pub_key = DH_get0_pub_key(dh);
+      priv_key = DH_get0_priv_key(dh);
+      p = DH_get0_p(dh);
+#else
+      pub_key = dh->pub_key;
+      priv_key = dh->priv_key;
+      p = dh->p;
+#endif
+
+      res = isValidPublicKey(pub_key, p, q1);
       if (!res)
 	{
-	  MP_free(dh->pub_key);
-	  MP_free(dh->priv_key);
-	  dh->pub_key = dh->priv_key = 0;
+	  MP_free(pub_key);
+	  MP_free(priv_key);
+#ifdef USE_OPENSSL_1_1
+    DH_set0_key(dh, NULL, NULL);
+#else
+	  dh->pub_key = dh->priv_key = NULL;
+#endif
 	}
 
       MP_free(q1);
@@ -272,15 +300,21 @@ static int
 DHGetPublicKey(MDH *dh, uint8_t *pubkey, size_t nPubkeyLen)
 {
   int len;
-  if (!dh || !dh->pub_key)
+  MP_t pub_key = NULL;
+#ifdef USE_OPENSSL_1_1
+  pub_key = DH_get0_pub_key(dh);
+#else
+  pub_key = dh->pub_key;
+#endif
+  if (!dh || !pub_key)
     return 0;
 
-  len = MP_bytes(dh->pub_key);
+  len = MP_bytes(pub_key);
   if (len <= 0 || len > (int) nPubkeyLen)
     return 0;
 
   memset(pubkey, 0, nPubkeyLen);
-  MP_setbin(dh->pub_key, pubkey + (nPubkeyLen - len), len);
+  MP_setbin(pub_key, pubkey + (nPubkeyLen - len), len);
   return 1;
 }
 
@@ -322,7 +356,15 @@ DHComputeSharedSecretKey(MDH *dh, uint8_t *pubkey, size_t nPubkeyLen,
   MP_gethex(q1, Q1024, len);
   assert(len);
 
-  if (isValidPublicKey(pubkeyBn, dh->p, q1))
+  MP_t p = NULL;
+
+#ifdef USE_OPENSSL_1_1
+  p = DH_get0_p(dh);
+#else
+  p = dh->p;
+#endif
+
+  if (isValidPublicKey(pubkeyBn, p, q1))
     res = MDH_compute_key(secret, nPubkeyLen, pubkeyBn, dh);
   else
     res = -1;
